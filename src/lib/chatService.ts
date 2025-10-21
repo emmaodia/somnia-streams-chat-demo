@@ -1,0 +1,71 @@
+// src/lib/chatService.ts
+import { SDK, SchemaEncoder, zeroBytes32 } from '@somnia-chain/streams'
+import { getPublicHttpClient, getWalletClient, publisherAddress } from './clients'
+import { waitForTransactionReceipt } from 'viem/actions'
+import { toHex, type Hex, parseAbiItem, encodeEventTopics, encodeAbiParameters } from 'viem'
+import { chatSchema } from './chatSchema'
+import { ensureChatEventSchema, CHAT_EVENT_ID, CHAT_EVENT_SIG } from './chatEvents'
+
+const enc = new SchemaEncoder(chatSchema)
+
+function getSdk(withWallet = false) {
+  return withWallet
+    ? new SDK({ public: getPublicHttpClient(), wallet: getWalletClient() })
+    : new SDK({ public: getPublicHttpClient() })
+}
+
+// If you have a constant schemaId, you can hardcode it.
+// Otherwise: compute + ensure registration once.
+let _schemaId: `0x${string}` | null = null
+export async function ensureChatSchema(): Promise<`0x${string}`> {
+  const sdk = getSdk(true)
+  if (_schemaId) return _schemaId
+  const id = await sdk.streams.computeSchemaId(chatSchema)
+  const exists = await sdk.streams.isDataSchemaRegistered(id)
+  if (!exists) {
+    const tx = await sdk.streams.registerSchema(chatSchema, zeroBytes32)
+    if (!tx) throw new Error('Failed to register chat schema')
+    await waitForTransactionReceipt(getPublicHttpClient(), { hash: tx })
+  }
+  _schemaId = id
+  console.log(id, "here")
+  return id
+}
+
+export async function sendMessage(roomName: string, content: string, senderName: string) {
+  if (!roomName?.trim()) throw new Error('roomName is required')
+  if (!content?.trim()) throw new Error('content is required')
+
+  const sdk = getSdk(true)
+  const schemaId = await ensureChatSchema()
+  await ensureChatEventSchema()
+
+  const roomId = toHex(roomName, { size: 32 })
+  const now = Date.now().toString()
+
+  const data: Hex = enc.encodeData([
+    { name: 'timestamp',  value: now,                type: 'uint64'  },
+    { name: 'roomId',     value: roomId,             type: 'bytes32' },
+    { name: 'content',    value: content,            type: 'string'  },
+    { name: 'senderName', value: senderName ?? '',   type: 'string'  },
+    { name: 'sender',     value: publisherAddress(), type: 'address' },
+  ])
+
+  const dataId = toHex(`${roomName}-${now}`, { size: 32 })
+
+  // Build event topics/data
+  const abiItem = parseAbiItem(`event ${CHAT_EVENT_SIG}`)
+  const topics = encodeEventTopics({ abi: [abiItem], args: { roomId } })
+  const nonIndexed = abiItem.inputs.filter(i => !i.indexed)
+  const eventData = nonIndexed.length ? encodeAbiParameters(nonIndexed, []) : '0x'
+
+  // One tx: publish data + emit event
+  const tx = await sdk.streams.setAndEmitEvents(
+    [{ id: dataId, schemaId, data }],
+    [{ id: CHAT_EVENT_ID, argumentTopics: topics.slice(1), data: eventData }]
+  )
+  if (!tx) throw new Error('Failed to setAndEmitEvents')
+  await waitForTransactionReceipt(getPublicHttpClient(), { hash: tx })
+console.log(tx, "here too")
+  return { txHash: tx }
+}
