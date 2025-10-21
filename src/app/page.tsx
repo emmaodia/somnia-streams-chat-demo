@@ -21,7 +21,7 @@ export default function Page() {
       if (!r.ok) throw new Error(j?.error || 'send failed')
       setContent('')
       reload() // refresh after send
-    } catch (e: any) {
+    } catch (e) {
       setError(e.message || String(e))
     }
   }

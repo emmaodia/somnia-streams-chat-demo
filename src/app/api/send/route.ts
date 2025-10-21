@@ -15,7 +15,7 @@ export async function POST(req: Request) {
 
     const { txHash } = await sendMessage(room, content, senderName ?? '')
     return NextResponse.json({ ok: true, txHash })
-  } catch (e: any) {
+  } catch (e) {
     // Log the real reason server-side, return a generic message client-side
     console.error('[api/send] error:', e)
     return NextResponse.json({ error: 'send failed (server)' }, { status: 500 })

@@ -6,7 +6,7 @@ import { chatSchema } from './chatSchema'
 import type { ChatMsg } from './chatQuery'
 import { toHex } from 'viem'
 
-const val = (f: any) => f?.value?.value ?? f?.value
+const val = (f) => f?.value?.value ?? f?.value
 
 /**
  * Fetch chat messages from Somnia Streams (read-only, auto-refresh, cumulative)
@@ -26,7 +26,7 @@ export function useChatMessages(roomName?: string, limit = 100, refreshMs = 5000
         '0x0000000000000000000000000000000000000000'
 
       const resp = await sdk.streams.getAllPublisherDataForSchema(schemaId, publisher)
-      const rows: any[][] = Array.isArray(resp) ? (resp as any[][]) : []
+      const rows = Array.isArray(resp) ? (resp) : []
 
       const want = roomName
         ? toHex(roomName, { size: 32 }).toLowerCase()
@@ -71,7 +71,7 @@ export function useChatMessages(roomName?: string, limit = 100, refreshMs = 5000
       })
 
       setError(null)
-    } catch (err: any) {
+    } catch (err) {
       console.error('❌ Failed to load chat messages:', err)
       setError(err.message || 'Failed to load messages')
     } finally {
