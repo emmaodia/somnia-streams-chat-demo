@@ -3,15 +3,28 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { SDK } from '@somnia-chain/streams'
 import { getPublicHttpClient } from './clients'
 import { chatSchema } from './chatSchema'
-import type { ChatMsg } from './chatQuery'
-import { toHex } from 'viem'
+import { toHex, type Hex } from 'viem'
 
-const val = (f) => f?.value?.value ?? f?.value
+// Helper to unwrap field values
+const val = (f: any) => f?.value?.value ?? f?.value
+
+// Message type
+export type ChatMsg = {
+  timestamp: number
+  roomId: `0x${string}`
+  content: string
+  senderName: string
+  sender: `0x${string}`
+}
 
 /**
  * Fetch chat messages from Somnia Streams (read-only, auto-refresh, cumulative)
  */
-export function useChatMessages(roomName?: string, limit = 100, refreshMs = 5000) {
+export function useChatMessages(
+  roomName?: string,
+  limit = 100,
+  refreshMs = 5000
+) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -20,42 +33,54 @@ export function useChatMessages(roomName?: string, limit = 100, refreshMs = 5000
   const loadMessages = useCallback(async () => {
     try {
       const sdk = new SDK({ public: getPublicHttpClient() })
+
+      // Compute schema ID from the chat schema
       const schemaId = await sdk.streams.computeSchemaId(chatSchema)
       const publisher =
-        process.env.NEXT_PUBLIC_PUBLISHER_ADDRESS ||
+        process.env.NEXT_PUBLIC_PUBLISHER_ADDRESS ??
         '0x0000000000000000000000000000000000000000'
 
+      // Fetch all publisher data for schema
       const resp = await sdk.streams.getAllPublisherDataForSchema(schemaId, publisher)
-      const rows = Array.isArray(resp) ? (resp) : []
 
-      const want = roomName
-        ? toHex(roomName, { size: 32 }).toLowerCase()
-        : null
+      // Ensure array structure (each row corresponds to an array of fields)
+      const rows: any[][] = Array.isArray(resp) ? (resp as any[][]) : []
+      if (!rows.length) {
+        setMessages([])
+        setLoading(false)
+        return
+      }
 
-      const newMessages: ChatMsg[] = []
+      // Convert room name to bytes32 for filtering (if applicable)
+      const want = roomName ? toHex(roomName, { size: 32 }).toLowerCase() : null
+
+      const parsed: ChatMsg[] = []
       for (const row of rows) {
-        if (!Array.isArray(row)) continue
+        if (!Array.isArray(row) || row.length < 5) continue
+
         const ts = Number(val(row[0]))
-        const ms = String(ts).length <= 10 ? ts * 1000 : ts
+        const ms = String(ts).length <= 10 ? ts * 1000 : ts // handle seconds vs ms
         const rid = String(val(row[1])) as `0x${string}`
+
+        // Skip messages from other rooms if filtered
         if (want && rid.toLowerCase() !== want) continue
-        newMessages.push({
+
+        parsed.push({
           timestamp: ms,
           roomId: rid,
           content: String(val(row[2]) ?? ''),
           senderName: String(val(row[3]) ?? ''),
-          sender: String(
-            val(row[4]) ?? '0x0000000000000000000000000000000000000000'
-          ) as `0x${string}`,
+          sender: (String(val(row[4])) as `0x${string}`) ??
+            '0x0000000000000000000000000000000000000000',
         })
       }
 
-      // Sort new messages chronologically
-      newMessages.sort((a, b) => a.timestamp - b.timestamp)
+      // Sort by timestamp (ascending)
+      parsed.sort((a, b) => a.timestamp - b.timestamp)
 
+      // Deduplicate and limit
       setMessages((prev) => {
-        // Combine existing and new, deduplicating by timestamp+sender+content
-        const combined = [...prev, ...newMessages]
+        const combined = [...prev, ...parsed]
         const unique = combined.filter(
           (msg, index, self) =>
             index ===
@@ -66,12 +91,11 @@ export function useChatMessages(roomName?: string, limit = 100, refreshMs = 5000
                 m.content === msg.content
             )
         )
-        // Keep only the latest N messages
         return unique.slice(-limit)
       })
 
       setError(null)
-    } catch (err) {
+    } catch (err: any) {
       console.error('❌ Failed to load chat messages:', err)
       setError(err.message || 'Failed to load messages')
     } finally {
@@ -79,15 +103,12 @@ export function useChatMessages(roomName?: string, limit = 100, refreshMs = 5000
     }
   }, [roomName, limit])
 
-  // Initial load + periodic refresh
+  // Initial load + polling
   useEffect(() => {
     setLoading(true)
     loadMessages()
-
     timerRef.current = setInterval(loadMessages, refreshMs)
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-    }
+    return () => timerRef.current && clearInterval(timerRef.current)
   }, [loadMessages, refreshMs])
 
   return { messages, loading, error, reload: loadMessages }
